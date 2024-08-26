@@ -31,20 +31,11 @@ impl ScanCallback for BeaconScanCallback {
     where
         I: Iterator<Item = AdStructure<'a>>,
     {
-        println!(
-            "[{:?}] CH:{:?} Type:{}",
-            metadata.timestamp.unwrap().ticks(),
-            metadata.channel,
-            hdebug(metadata.pdu_type.unwrap()),
-        );
-        if let Some(rssi) = metadata.rssi {
-            println!("RSSI:{:?}dBm ", rssi);
-        }
-        println!("BDADDR:{} DATA:", hdebug(addr));
-        let mut first = true;
-        for packet in data {
-            println!("{}{}", if first { " " } else { " / " }, hdebug(packet));
-            first = false;
+        let raw = addr.raw();
+        if raw[0] == 101 {
+            if let Some(rssi) = metadata.rssi {
+                println!("RSSI:{:?}dBm ", rssi);
+            }
         }
     }
 }
