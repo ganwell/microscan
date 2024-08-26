@@ -2,7 +2,7 @@
 #![no_main]
 
 use core::cell::RefCell;
-use core::fmt::Write;
+use core::fmt::{Debug, Write};
 use core::ops::DerefMut;
 use core::panic::PanicInfo;
 
@@ -32,15 +32,18 @@ impl ScanCallback for BeaconScanCallback {
         I: Iterator<Item = AdStructure<'a>>,
     {
         println!(
-            "[{:?}] CH:{:?} ",
+            "[{:?}] CH:{:?} Type:{}",
             metadata.timestamp.unwrap().ticks(),
             metadata.channel,
+            hdebug(metadata.pdu_type.unwrap()),
         );
         if let Some(rssi) = metadata.rssi {
             println!("RSSI:{:?}dBm ", rssi);
         }
+        println!("BDADDR:{} DATA:", hdebug(addr));
         let mut first = true;
         for packet in data {
+            println!("{}{}", if first { " " } else { " / " }, hdebug(packet));
             first = false;
         }
     }
@@ -53,6 +56,15 @@ struct Shared {
 }
 
 static SHARED: Mutex<RefCell<Option<Shared>>> = Mutex::new(RefCell::new(None));
+
+fn hdebug<T: Debug>(str: T) -> &'static str {
+    static mut S: String<512> = String::new();
+    unsafe {
+        S.clear();
+        write!(S, "{:?}", str);
+        S.as_str()
+    }
+}
 
 #[entry]
 fn main() -> ! {
@@ -88,7 +100,7 @@ fn main() -> ! {
 }
 
 #[interrupt]
-fn TIMER0() {
+fn RADIO() {
     section(|cs| {
         if let Some(ref mut shared) = SHARED.borrow(cs).borrow_mut().deref_mut() {
             let timer = &mut shared.timer;
@@ -103,7 +115,7 @@ fn TIMER0() {
 }
 
 #[interrupt]
-fn RADIO() {
+fn TIMER0() {
     section(|cs| {
         if let Some(ref mut shared) = SHARED.borrow(cs).borrow_mut().deref_mut() {
             let timer = &mut shared.timer;
