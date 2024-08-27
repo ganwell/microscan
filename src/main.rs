@@ -2,13 +2,17 @@
 #![no_main]
 
 use panic_rtt_target as _;
+mod frames;
 
 #[rtic::app(device = microbit::pac, peripherals = true)]
 mod app {
+    use core::cmp::{max, min};
     use core::mem::MaybeUninit;
+    use core::sync::atomic::{AtomicU8, Ordering};
 
+    use microbit::display::nonblocking::Display;
     use microbit::hal::clocks::Clocks;
-    use microbit::pac;
+    use microbit::{pac, Board};
     use rtt_target::{rprint, rprintln, rtt_init, set_print_channel, ChannelMode};
     use rubble::beacon::{BeaconScanner, ScanCallback};
     use rubble::link::ad_structure::AdStructure;
@@ -18,30 +22,69 @@ mod app {
     use rubble_nrf5x::radio::{BleRadio, PacketBuffer};
     use rubble_nrf5x::timer::BleTimer;
 
-    pub struct BeaconScanCallback;
+    use crate::frames::FRAMES;
+
+    static VALUE: AtomicU8 = AtomicU8::new(0);
+
+    #[derive(Copy, Clone)]
+    struct RSSIEntry {
+        timestamp: u32,
+        rssi: u8,
+    }
+
+    impl Default for RSSIEntry {
+        fn default() -> Self {
+            RSSIEntry {
+                timestamp: 0,
+                rssi: 0,
+            }
+        }
+    }
+
+    pub struct BeaconScanCallback {
+        log: [RSSIEntry; 16],
+        pos: usize,
+    }
+
+    impl Default for BeaconScanCallback {
+        fn default() -> Self {
+            BeaconScanCallback {
+                log: [RSSIEntry::default(); 16],
+                pos: 0,
+            }
+        }
+    }
 
     impl ScanCallback for BeaconScanCallback {
         fn beacon<'a, I>(&mut self, addr: DeviceAddress, data: I, metadata: Metadata)
         where
             I: Iterator<Item = AdStructure<'a>>,
         {
-            rprint!(
-                "[{:?}] CH:{:?} Type:{:?} ",
-                metadata.timestamp.unwrap().ticks(),
-                metadata.channel,
-                metadata.pdu_type.unwrap(),
-            );
+            //rprint!(
+            //    "[{:?}] CH:{:?} Type:{:?} ",
+            //    metadata.timestamp.unwrap().ticks(),
+            //    metadata.channel,
+            //    metadata.pdu_type.unwrap(),
+            //);
             if let Some(rssi) = metadata.rssi {
-                rprint!("RSSI:{:?}dBm ", rssi);
+                let mut rssi = rssi as i16;
+                rssi += 43;
+                rssi = max(0, rssi);
+                let entry = RSSIEntry {
+                    timestamp: metadata.timestamp.unwrap().ticks(),
+                    rssi: rssi as u8,
+                };
+                self.log[self.pos] = entry;
+                self.pos = (self.pos + 1) % 16;
             }
-            rprint!("BDADDR:{:?} DATA:", addr);
-            let mut first = true;
-            for packet in data {
-                rprint!("{}{:02x?}", if first { " " } else { " / " }, packet);
-                first = false;
-            }
-            rprintln!("");
-            rprintln!("");
+            //rprint!("BDADDR:{:?} DATA:", addr);
+            //let mut first = true;
+            //for packet in data {
+            //    rprint!("{}{:02x?}", if first { " " } else { " / " }, packet);
+            //    first = false;
+            //}
+            //rprintln!("");
+            //rprintln!("");
         }
     }
 
@@ -50,10 +93,13 @@ mod app {
         radio: BleRadio,
         ble_timer: BleTimer<pac::TIMER0>,
         scanner: BeaconScanner<BeaconScanCallback, AllowAll>,
+        display: Display<pac::TIMER1>,
     }
 
     #[local]
-    struct Local {}
+    struct Local {
+        last_rssi: u8,
+    }
 
     #[init(local=[
         tx_buf: MaybeUninit<PacketBuffer> = MaybeUninit::uninit(),
@@ -70,21 +116,23 @@ mod app {
             }
         };
         set_print_channel(rtt.up.0);
+        let board = Board::new(ctx.device, ctx.core);
 
-        let _clocks = Clocks::new(ctx.device.CLOCK).enable_ext_hfosc();
+        let _clocks = Clocks::new(board.CLOCK).enable_ext_hfosc();
 
-        let mut ble_timer = BleTimer::init(ctx.device.TIMER0);
+        let mut ble_timer = BleTimer::init(board.TIMER0);
 
         let ble_rx_buf: &'static mut _ = ctx.local.rx_buf.write([0; MIN_PDU_BUF]);
         let ble_tx_buf: &'static mut _ = ctx.local.tx_buf.write([0; MIN_PDU_BUF]);
-        let mut radio =
-            BleRadio::new(ctx.device.RADIO, &ctx.device.FICR, ble_tx_buf, ble_rx_buf);
+        let mut radio = BleRadio::new(board.RADIO, &board.FICR, ble_tx_buf, ble_rx_buf);
 
-        let mut scanner = BeaconScanner::new(BeaconScanCallback);
+        let mut scanner = BeaconScanner::new(BeaconScanCallback::default());
         let scanner_cmd = scanner.configure(ble_timer.now(), Duration::millis(500));
 
         radio.configure_receiver(scanner_cmd.radio);
         ble_timer.configure_interrupt(scanner_cmd.next_update);
+
+        let display = Display::new(board.TIMER1, board.display_pins);
 
         rprintln!("nRF52 scanner ready!");
 
@@ -93,10 +141,25 @@ mod app {
                 radio,
                 scanner,
                 ble_timer,
+                display,
             },
-            Local {},
+            Local { last_rssi: 0 },
             init::Monotonics(),
         )
+    }
+
+    #[task(binds = TIMER1, priority = 2, shared = [display], local = [last_rssi])]
+    fn timer1(mut ctx: timer1::Context) {
+        let rssi = VALUE.load(Ordering::SeqCst);
+        let frame = min(26, rssi);
+        let last = *ctx.local.last_rssi;
+        *ctx.local.last_rssi = frame;
+        ctx.shared.display.lock(|display| {
+            if last != frame {
+                display.show(&FRAMES[frame as usize]);
+            }
+            display.handle_display_event();
+        });
     }
 
     #[task(binds = RADIO, shared = [radio, scanner, ble_timer])]
