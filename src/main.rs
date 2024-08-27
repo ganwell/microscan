@@ -13,6 +13,7 @@ mod app {
     use microbit::display::nonblocking::Display;
     use microbit::hal::clocks::Clocks;
     use microbit::{pac, Board};
+    use ringbuffer::{ConstGenericRingBuffer, RingBuffer};
     use rtt_target::{rprint, rprintln, rtt_init, set_print_channel, ChannelMode};
     use rubble::beacon::{BeaconScanner, ScanCallback};
     use rubble::link::ad_structure::AdStructure;
@@ -42,15 +43,15 @@ mod app {
     }
 
     pub struct BeaconScanCallback {
-        log: [RSSIEntry; 16],
-        pos: usize,
+        log: ConstGenericRingBuffer<RSSIEntry, 128>,
+        rssi_window: ConstGenericRingBuffer<u8, 4>,
     }
 
     impl Default for BeaconScanCallback {
         fn default() -> Self {
             BeaconScanCallback {
-                log: [RSSIEntry::default(); 16],
-                pos: 0,
+                log: ConstGenericRingBuffer::new(),
+                rssi_window: ConstGenericRingBuffer::new(),
             }
         }
     }
@@ -67,15 +68,56 @@ mod app {
             //    metadata.pdu_type.unwrap(),
             //);
             if let Some(rssi) = metadata.rssi {
-                let mut rssi = rssi as i16;
-                rssi += 43;
-                rssi = max(0, rssi);
+                let mut rssi = rssi.abs() as u8;
+                rssi = rssi.saturating_sub(43);
                 let entry = RSSIEntry {
                     timestamp: metadata.timestamp.unwrap().ticks(),
-                    rssi: rssi as u8,
+                    rssi: rssi,
                 };
-                self.log[self.pos] = entry;
-                self.pos = (self.pos + 1) % 16;
+                self.log.enqueue(entry);
+                let frontstamp = match self.log.front() {
+                    Some(front) => front.timestamp,
+                    None => 0,
+                };
+                let diff = entry.timestamp.wrapping_sub(frontstamp);
+
+                const MAX_DELAY: u32 = 500_000;
+                if self.log.is_full() || diff > MAX_DELAY {
+                    let mut min_rssi = u8::MAX;
+                    let mut valid_items: usize = 0;
+                    for (i, item) in self.log.iter().enumerate().rev() {
+                        let diff = entry.timestamp.wrapping_sub(item.timestamp);
+                        if diff < MAX_DELAY {
+                            min_rssi = min(min_rssi, item.rssi);
+                            valid_items += 1;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    // Remove all entries older than the oldest valid entry
+                    // if the log was full remove at least half of the log
+                    if self.log.is_full() {
+                        valid_items = max(self.log.capacity() / 2, valid_items);
+                    }
+                    while valid_items > 0 {
+                        self.log.skip();
+                        valid_items -= 1;
+                    }
+
+                    let mut avg_min_rssi: u32 = 0;
+                    self.rssi_window.enqueue(min_rssi);
+                    for i in self.rssi_window.iter() {
+                        avg_min_rssi += *i as u32;
+                    }
+                    avg_min_rssi /= self.rssi_window.len() as u32;
+                    if self.rssi_window.is_full() {
+                        self.rssi_window.skip();
+                    }
+
+                    VALUE.store(avg_min_rssi as u8, Ordering::SeqCst);
+                    rprintln!("avg_min_rssi: {}", avg_min_rssi);
+                }
             }
             //rprint!("BDADDR:{:?} DATA:", addr);
             //let mut first = true;
