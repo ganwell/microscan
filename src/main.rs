@@ -176,7 +176,7 @@ mod app {
     #[task(binds = TIMER1, priority = 2, shared = [display], local = [last_rssi])]
     fn timer1(mut ctx: timer1::Context) {
         let rssi = VALUE.load(Ordering::SeqCst);
-        let frame = min(26, rssi);
+        let frame = min(50, rssi);
         let last = *ctx.local.last_rssi;
         *ctx.local.last_rssi = frame;
         ctx.shared.display.lock(|display| {
