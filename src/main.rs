@@ -37,13 +37,13 @@ mod app {
         fn default() -> Self {
             RSSIEntry {
                 timestamp: 0,
-                rssi: 0,
+                rssi: u8::MAX,
             }
         }
     }
 
     pub struct BeaconScanCallback {
-        log: ConstGenericRingBuffer<RSSIEntry, 128>,
+        log: ConstGenericRingBuffer<RSSIEntry, 32>,
         rssi_window: ConstGenericRingBuffer<u8, 4>,
     }
 
@@ -69,37 +69,35 @@ mod app {
             //);
             if let Some(rssi) = metadata.rssi {
                 let mut rssi = rssi.abs() as u8;
-                rssi = rssi.saturating_sub(43);
+                rssi = rssi.saturating_sub(42);
                 let entry = RSSIEntry {
                     timestamp: metadata.timestamp.unwrap().ticks(),
                     rssi: rssi,
                 };
                 self.log.enqueue(entry);
-                let frontstamp = match self.log.front() {
-                    Some(front) => front.timestamp,
+                let getstamp = match self.log.get_signed(-(self.log.len() as isize)) {
+                    Some(get) => get.timestamp,
                     None => 0,
                 };
-                let diff = entry.timestamp.wrapping_sub(frontstamp);
+                let diff = entry.timestamp.wrapping_sub(getstamp);
 
-                const MAX_DELAY: u32 = 500_000;
+                const MAX_DELAY: u32 = 250_000;
                 if self.log.is_full() || diff > MAX_DELAY {
                     let mut min_rssi = u8::MAX;
                     let mut valid_items: usize = 0;
-                    for (i, item) in self.log.iter().enumerate().rev() {
+                    for item in self.log.iter().rev() {
                         let diff = entry.timestamp.wrapping_sub(item.timestamp);
+
                         if diff < MAX_DELAY {
                             min_rssi = min(min_rssi, item.rssi);
-                            valid_items += 1;
+                            if diff < MAX_DELAY {
+                                valid_items += 1;
+                            }
                         } else {
                             break;
                         }
                     }
 
-                    // Remove all entries older than the oldest valid entry
-                    // if the log was full remove at least half of the log
-                    if self.log.is_full() {
-                        valid_items = max(self.log.capacity() / 2, valid_items);
-                    }
                     while valid_items > 0 {
                         self.log.skip();
                         valid_items -= 1;
@@ -115,8 +113,8 @@ mod app {
                         self.rssi_window.skip();
                     }
 
+                    rprintln!("min_rssi: {}", avg_min_rssi);
                     VALUE.store(avg_min_rssi as u8, Ordering::SeqCst);
-                    rprintln!("avg_min_rssi: {}", avg_min_rssi);
                 }
             }
             //rprint!("BDADDR:{:?} DATA:", addr);
