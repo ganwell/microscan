@@ -61,12 +61,6 @@ mod app {
         where
             I: Iterator<Item = AdStructure<'a>>,
         {
-            //rprint!(
-            //    "[{:?}] CH:{:?} Type:{:?} ",
-            //    metadata.timestamp.unwrap().ticks(),
-            //    metadata.channel,
-            //    metadata.pdu_type.unwrap(),
-            //);
             if let Some(rssi) = metadata.rssi {
                 let mut rssi = rssi.abs() as u8;
                 rssi = rssi.saturating_sub(42);
@@ -113,18 +107,9 @@ mod app {
                         self.rssi_window.skip();
                     }
 
-                    rprintln!("avg_min_rssi: {}", avg_min_rssi);
                     VALUE.store(avg_min_rssi as u8, Ordering::SeqCst);
                 }
             }
-            //rprint!("BDADDR:{:?} DATA:", addr);
-            //let mut first = true;
-            //for packet in data {
-            //    rprint!("{}{:02x?}", if first { " " } else { " / " }, packet);
-            //    first = false;
-            //}
-            //rprintln!("");
-            //rprintln!("");
         }
     }
 
