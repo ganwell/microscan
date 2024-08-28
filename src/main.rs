@@ -113,7 +113,7 @@ mod app {
                         self.rssi_window.skip();
                     }
 
-                    rprintln!("min_rssi: {}", avg_min_rssi);
+                    rprintln!("avg_min_rssi: {}", avg_min_rssi);
                     VALUE.store(avg_min_rssi as u8, Ordering::SeqCst);
                 }
             }
