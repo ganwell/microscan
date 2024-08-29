@@ -43,7 +43,7 @@ mod app {
     }
 
     pub struct BeaconScanCallback {
-        log: ConstGenericRingBuffer<RSSIEntry, 32>,
+        log: ConstGenericRingBuffer<RSSIEntry, 64>,
         rssi_window: ConstGenericRingBuffer<u8, 4>,
     }
 
@@ -79,35 +79,23 @@ mod app {
                 if self.log.is_full() || diff > MAX_DELAY {
                     let mut min_rssi = u8::MAX;
                     let mut valid_items: usize = 0;
-                    for item in self.log.iter().rev() {
+                    for item in self.log.iter() {
                         let diff = entry.timestamp.wrapping_sub(item.timestamp);
 
-                        if diff < MAX_DELAY {
+                        if diff < MAX_DELAY * 8 {
                             min_rssi = min(min_rssi, item.rssi);
-                            if diff < MAX_DELAY {
-                                valid_items += 1;
-                            }
-                        } else {
-                            break;
+                            valid_items += 1;
                         }
                     }
+                    //rprintln!("{} {}", valid_items, self.log.len());
 
-                    while valid_items > 0 {
-                        self.log.skip();
-                        valid_items -= 1;
-                    }
-
-                    let mut avg_min_rssi: u32 = 0;
+                    let mut min_max_rssi: u32 = 0;
                     self.rssi_window.enqueue(min_rssi);
                     for i in self.rssi_window.iter() {
-                        avg_min_rssi += *i as u32;
-                    }
-                    avg_min_rssi /= self.rssi_window.len() as u32;
-                    if self.rssi_window.is_full() {
-                        self.rssi_window.skip();
+                        min_max_rssi += max(min_max_rssi, *i as u32);
                     }
 
-                    VALUE.store(avg_min_rssi as u8, Ordering::SeqCst);
+                    VALUE.store(min_max_rssi as u8, Ordering::SeqCst);
                 }
             }
         }
