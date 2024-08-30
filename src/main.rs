@@ -87,12 +87,11 @@ mod app {
                             valid_items += 1;
                         }
                     }
-                    //rprintln!("{} {}", valid_items, self.log.len());
 
                     let mut min_max_rssi: u32 = 0;
                     self.rssi_window.enqueue(min_rssi);
                     for i in self.rssi_window.iter() {
-                        min_max_rssi += max(min_max_rssi, *i as u32);
+                        min_max_rssi = max(min_max_rssi, *i as u32);
                     }
 
                     VALUE.store(min_max_rssi as u8, Ordering::SeqCst);
@@ -164,7 +163,7 @@ mod app {
     #[task(binds = TIMER1, priority = 2, shared = [display], local = [last_rssi])]
     fn timer1(mut ctx: timer1::Context) {
         let rssi = VALUE.load(Ordering::SeqCst);
-        let frame = min(50, rssi);
+        let frame = min(51, rssi);
         let last = *ctx.local.last_rssi;
         *ctx.local.last_rssi = frame;
         ctx.shared.display.lock(|display| {
